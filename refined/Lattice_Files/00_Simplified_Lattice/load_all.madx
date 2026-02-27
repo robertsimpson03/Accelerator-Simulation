@@ -1,0 +1,8 @@
+
+call, file='/home/rsimpson/MPhys Project/Code/Accelerator Simulation/Lattice_Files/00_Simplified_Lattice/ISIS.elements';
+call, file='/home/rsimpson/MPhys Project/Code/Accelerator Simulation/Lattice_Files/00_Simplified_Lattice/ISIS.strength';
+call, file='/home/rsimpson/MPhys Project/Code/Accelerator Simulation/Lattice_Files/00_Simplified_Lattice/ISIS.sequence';
+
+use, sequence=sp_tune_m1;
+
+call, file='/home/rsimpson/MPhys Project/Code/Accelerator Simulation/Lattice_Files/00_Simplified_Lattice/ISIS.injected_beam';
