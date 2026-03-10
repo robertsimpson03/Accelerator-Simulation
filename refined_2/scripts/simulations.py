@@ -46,32 +46,12 @@ class Simulation:
             nemitt_y=self.nemitt_y_0,
             method='4d',
             freeze_longitudinal=True,
-            mode='normalized_transverse',
-        )
+            mode='normalized_transverse')
     
 
     def add_space_charge(self, beam_intensity, n_interactions):
         self.beam_intensity = beam_intensity
         self.n_interactions = n_interactions
-
-        """lprofile_data = {
-            '__class__': 'LongitudinalProfileCoasting',
-            'beam_line_density': self.beam_intensity / self.line.get_length()
-        }
-
-        #lprofile = xf.LongitudinalProfileCoasting(
-                context=self.context, 
-                beam_line_density=self.beam_intensity / self.line.get_length()
-                )
-
-        xf.install_spacecharge_frozen(line=self.line,
-                           longitudinal_profile=lprofile_data,
-                           nemitt_x=self.nemitt_x_0, nemitt_y=self.nemitt_y_0,
-                           sigma_z=1, # Test
-                           num_spacecharge_interactions=self.n_interactions,
-                           delta_rms=1 # Test
-                   )
-        #xf.SpaceChargeBiGaussian(longitudinal_profile=lprofile_data)"""
 
         sigma_z_fake = 1e16 
         circumference = self.line.get_length()
@@ -87,13 +67,12 @@ class Simulation:
 
         xf.install_spacecharge_frozen(
             line=self.line,
-            longitudinal_profile=lprofile,#_data,
+            longitudinal_profile=lprofile,
             nemitt_x=self.nemitt_x_0, 
             nemitt_y=self.nemitt_y_0,
             sigma_z=sigma_z_fake,
             num_spacecharge_interactions=self.n_interactions,
-            delta_rms=0 
-        )
+            delta_rms=0)
 
 
     def run(self, n_turns):
@@ -127,11 +106,11 @@ class Simulation:
             sigma_y = bigaussian.sigma_y
             mean_x = bigaussian.mean_x
             mean_y = bigaussian.mean_y
-
             sigma_x_list.append(sigma_x)
             sigma_y_list.append(sigma_y)
             mean_x_list.append(mean_x)
             mean_y_list.append(mean_y)
+
         sigma_x = np.mean(np.array(sigma_x_list))
         sigma_y = np.mean(np.array(sigma_y_list))
         mean_x = np.mean(np.array(mean_x_list))
