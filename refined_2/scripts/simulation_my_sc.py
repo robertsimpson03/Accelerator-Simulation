@@ -7,7 +7,8 @@ from datetime import datetime
 from dataclasses import dataclass
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.constants import e, m_p
+from scipy.constants import e, m_p, epsilon_0
+k_e = 1/(4*np.pi*epsilon_0)
 import pandas as pd
 
 import xtrack as xt
@@ -16,6 +17,8 @@ import xobjects as xo
 import xfields as xf
 
 from cpymad.madx import Madx
+
+from PyBE.gaussian import get_field
 
 @dataclass
 class Simulation:
@@ -59,7 +62,7 @@ class Simulation:
         n_particles_fake = n_particles * np.sqrt(2*np.pi)*sigma_z_fake
 
         lprofile = xf.LongitudinalProfileQGaussian(
-                number_of_particles= n_particles_fake,
+                number_of_particles= 0, # give xfields sc 0 strength
                 sigma_z= sigma_z_fake,
                 z0= 0.,
                 q_parameter= 1.0)
@@ -77,7 +80,11 @@ class Simulation:
 
     def run(self, n_turns):
         self.n_turns=n_turns
-        coef = e/(self.particles.energy0*self.particles.beta0**2)
+
+        line_density = e * self.beam_intensity/self.line.get_length()
+        coef = k_e/(self.particles.energy0
+                    *self.particles.gamma0**2 # Try to figure out why i need this
+                    *self.particles.beta0**2)
 
         self.line.build_tracker(_context=self.context)
         start_time=time.perf_counter()
@@ -90,11 +97,25 @@ class Simulation:
             print(f'Turn: {turn}')
 
             for i in range(self.n_interactions):
-                if i !=(self.n_interactions-1):
+                spacecharge_element = self.line.elements[
+                        self.line.element_names.index(f'spacecharge_{i}')]
+                l = spacecharge_element.length
+                sigma_x = spacecharge_element.sigma_x
+                sigma_y = spacecharge_element.sigma_y
+                
+                Ex, Ey = get_field(np.array(self.particles.x),
+                                   np.array(self.particles.y),
+                                   sigma_x, sigma_y)
+
+                self.particles.px += coef * l * Ex * line_density
+                self.particles.py += coef * l * Ey * line_density
+
+                if i != (self.n_interactions-1):
                     self._track_section(start=f'spacecharge_{i}', 
                                         stop=f'spacecharge_{i+1}')
                 else:
                     self._track_section(start=f'spacecharge_{i}', stop=0)
+
 
         self.run_time = time.perf_counter() - start_time
     
