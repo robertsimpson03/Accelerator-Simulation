@@ -1,0 +1,252 @@
+import numpy as np
+import os
+from pathlib import Path
+import time
+import h5py
+from datetime import datetime
+from dataclasses import dataclass
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.constants import e, m_p, epsilon_0
+k_e = 1/(4*np.pi*epsilon_0)
+import pandas as pd
+
+import xtrack as xt
+import xpart as xp
+import xobjects as xo
+import xfields as xf
+
+from cpymad.madx import Madx
+
+from pipefields.rectangle import get_field
+
+@dataclass
+class Simulation:
+    folder: Path = Path('Lattice_Files/02_Aperture_Lattice/')
+    threads: int = 1
+    slices: int = 4
+    #thick: bool = False
+    n_macro_particles: int = 1000
+    nemitt_x_0: float = 1e-6
+    nemitt_y_0: float = 1e-6
+    particle_type: str = 'proton'
+    p0c: float = 0.37033168 * 1e9
+
+    def __post_init__(self):
+        self.line = self._build_line() 
+        self.context = xo.ContextCpu(omp_num_threads=self.threads)
+
+        self.line.set_particle_ref(self.particle_type, p0c=self.p0c)
+        tw = self.line.twiss(method='4d', freeze_longitudinal=True,)
+        self.twiss = tw
+        if self.n_macro_particles=='co':
+            self.particles = self.line.build_particles(
+                    x=tw.x[0], 
+                    y=tw.y[0], 
+                    px=tw.px[0], 
+                    py=tw.py[0],
+                    #zeta=tw.zeta[0],
+                    #delta=tw.delta[0]
+                    method='4d', freeze_longitudinal=True,
+            )
+
+        else:
+            self.particles = self.line.build_particles(
+                num_particles=self.n_macro_particles,
+                x_norm=np.random.normal(size=self.n_macro_particles),
+                y_norm=np.random.normal(size=self.n_macro_particles),
+                px_norm=np.random.normal(size=self.n_macro_particles),
+                py_norm=np.random.normal(size=self.n_macro_particles),
+                nemitt_x=self.nemitt_x_0,
+                nemitt_y=self.nemitt_y_0,
+                method='4d',
+                freeze_longitudinal=True,
+                mode='normalized_transverse')
+    
+    def insert_dipole_error(self, strength, s=0):
+        dipole = xt.Multipole(ksl=[strength])
+        self.line.insert_element(at_s=s, element=dipole, 
+                                 name=f'dipole_error_at_{s}')
+
+    def add_space_charge(self, beam_intensity, n_interactions):
+        self.beam_intensity = beam_intensity
+        self.n_interactions = n_interactions
+
+        lprofile = xf.LongitudinalProfileQGaussian(
+                number_of_particles= 0, # give xfields sc 0 strength
+                sigma_z= 1e16,
+                z0= 0.,
+                q_parameter= 1.0)
+
+
+        xf.install_spacecharge_frozen(
+            line=self.line,
+            longitudinal_profile=lprofile,
+            nemitt_x=self.nemitt_x_0, 
+            nemitt_y=self.nemitt_y_0,
+            sigma_z=1e16,
+            num_spacecharge_interactions=self.n_interactions,
+            delta_rms=0)
+
+
+    def run(self, n_turns, space_charge=False):
+        self.n_turns=n_turns
+        self.line_density = e * self.beam_intensity/self.line.get_length()
+        self.coef = self.line_density*k_e/(self.particles.energy0
+                                           *self.particles.gamma0**2
+                                           *self.particles.beta0**2)
+
+        self.line.build_tracker(_context=self.context)
+        start_time=time.perf_counter()
+
+        self.x_scbsc = [self.particles.x.copy()]
+        self.y_scbsc = [self.particles.y.copy()]
+        self.px_scbsc = [self.particles.px.copy()]
+        self.py_scbsc = [self.particles.py.copy()]
+        for turn in range(self.n_turns):
+            print(f'Turn: {turn}')
+
+            for kick_idx in range(self.n_interactions):
+                sc_element = f'spacecharge_{kick_idx}'
+                ele_idx = self.line.element_names.index(sc_element)
+                if space_charge==True:
+                    self._apply_kick(ele_idx)
+
+                if kick_idx != (self.n_interactions-1):
+                    self._track_section(start=sc_element, 
+                                        stop=f'spacecharge_{kick_idx+1}')
+                else:
+                    self._track_section(start=sc_element, stop=0)
+
+        self.run_time = time.perf_counter() - start_time
+    
+    def _track_section(self, start=None, stop=None):
+        self.line.track(self.particles, ele_start=start, ele_stop=stop)
+        self.x_scbsc.append(self.particles.x.copy())
+        self.y_scbsc.append(self.particles.y.copy())
+        self.px_scbsc.append(self.particles.px.copy())
+        self.py_scbsc.append(self.particles.py.copy())
+
+    def _apply_kick(self, ele_idx):
+        spacecharge_element = self.line.elements[ele_idx] 
+        min_x, max_x, min_y, max_y = self._get_aper_size(ele_idx)
+
+        l = spacecharge_element.length
+        sigma_x = spacecharge_element.sigma_x
+        sigma_y = spacecharge_element.sigma_y
+
+        Ex, Ey = get_field(np.array(self.particles.x),                                                      np.array(self.particles.y),
+                           x0=max_x+min_x, y0=max_y+min_y,
+                           sx=sigma_x, sy=sigma_y,
+                           Lx=max_x-min_x, Ly=max_y-min_y)
+
+        self.particles.px += self.coef * l * Ex
+        self.particles.py += self.coef * l * Ey
+
+    """def _get_aper_size(ele_idx):
+        found_aper = False
+        aper_idx = ele_idx
+        while found_aper==False:
+            aper_idx += 1
+            try:
+                self.line.elements[aper_idx].x_max
+            except:
+                pass
+            else:
+                found_aper = True
+        return self.line.elements[aper_idx].min_x
+               self.line.elements[aper_idx].max_x, 
+               self.line.elements[aper_idx].min_y,
+               self.line.elements[aper_idx].max_y
+    """
+
+    def _get_aper_size(self, ele_idx):
+        for ele in self.line.elements[ele_idx + 1:]:
+            if hasattr(ele, 'max_x'):
+                return ele.min_x, ele.max_x, ele.min_y, ele.max_y
+
+
+    def save(self, filename='untitled'):
+        df_twiss = self.twiss.to_pandas()
+        df_twiss.to_hdf(f'data/{filename}.h5', 
+                        key='twiss_data', 
+                        mode='w', 
+                        format='fixed')
+
+        bigaussians = [e for e in self.line.elements if isinstance(e, xf.SpaceChargeBiGaussian)]
+
+        sigma_x_list = []
+        sigma_y_list = []
+        mean_x_list = []
+        mean_y_list = []
+        for bigaussian in bigaussians:
+            sigma_x = bigaussian.sigma_x
+            sigma_y = bigaussian.sigma_y
+            mean_x = bigaussian.mean_x
+            mean_y = bigaussian.mean_y
+            sigma_x_list.append(sigma_x)
+            sigma_y_list.append(sigma_y)
+            mean_x_list.append(mean_x)
+            mean_y_list.append(mean_y)
+
+        sigma_x = np.mean(np.array(sigma_x_list))
+        sigma_y = np.mean(np.array(sigma_y_list))
+        mean_x = np.mean(np.array(mean_x_list))
+        mean_y = np.mean(np.array(mean_y_list))
+
+        self.x_scbsc = np.array(self.x_scbsc).T
+        self.y_scbsc = np.array(self.y_scbsc).T
+        self.px_scbsc = np.array(self.px_scbsc).T
+        self.py_scbsc = np.array(self.py_scbsc).T
+        with h5py.File(f'data/{filename}.h5', 'a') as f:
+            f.create_dataset('x_scbsc', data=self.x_scbsc, compression='gzip')
+            f.create_dataset('y_scbsc', data=self.y_scbsc, compression='gzip')
+            f.create_dataset('px_scbsc', data=self.px_scbsc, compression='gzip')
+            f.create_dataset('py_scbsc', data=self.py_scbsc, compression='gzip')
+
+            f.attrs['time'] = datetime.now().strftime("%Y%m%d_%H%M%S")
+            f.attrs['threads'] = self.threads
+            f.attrs['slices'] = self.slices
+            #f.attrs['thick'] = self.thick
+
+            f.attrs['gamma'] = self.particles.gamma0[0]
+            f.attrs['beta'] = self.particles.beta0[0]
+            
+            f.attrs['n_macro_particles'] = self.n_macro_particles
+            f.attrs['n_turns'] = self.n_turns
+            f.attrs['nemitt_x_0'] = self.nemitt_x_0
+            f.attrs['nemitt_y_0'] = self.nemitt_y_0
+
+            f.attrs['qx'] = self.twiss.qx
+            f.attrs['qy'] = self.twiss.qy
+            f.attrs['dqx'] = self.twiss.dqx
+            f.attrs['dqy'] = self.twiss.dqy
+
+            f.attrs['sigma_x'] = sigma_x
+            f.attrs['sigma_y'] = sigma_y
+            f.attrs['mean_x'] = mean_x
+            f.attrs['mean_y'] = mean_y
+
+            f.attrs['n_interactions'] = self.n_interactions
+            f.attrs['beam_intensity'] = self.beam_intensity
+
+        print(f'File saved at data/{filename}')
+
+
+    def _build_line(self):
+        madx = Madx(stdout=False)
+        madx.call(str(self.folder / 'ISIS.injected_beam'))
+        madx.call(str(self.folder / 'ISIS.elements'))
+        madx.call(str(self.folder / 'ISIS.strength'))
+        madx.call(str(self.folder / 'ISIS.sequence'))
+        madx.call(str(self.folder / 'ISIS.aperture'))
+        madx.use('synchrotron')
+        madx.command.select(flag='makethin', slice=self.slices, thick=False)
+        madx.command.makethin(sequence='synchrotron', style='teapot', makedipedge=True)
+
+        line = xt.Line.from_madx_sequence(madx.sequence.synchrotron, install_apertures=True)
+
+        return line
+
+
+
