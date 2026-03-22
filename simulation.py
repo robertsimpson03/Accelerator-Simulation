@@ -142,8 +142,12 @@ class Simulation:
 
     def set_up(self, n_particles, n_turns, n_monitors, 
                nemitt_x_0=1e-6, nemitt_y_0=1e-6):
+        self.particle_on_co = self.line.find_closed_orbit(
+                num_turns=n_turns, freeze_longitudinal=True)
+
         self.particles = _build_particles(self.line, n_particles, 
-                                          nemitt_x_0, nemitt_y_0)
+                                          nemitt_x_0, nemitt_y_0,
+                                          self.particle_on_co)
         self.line = _add_monitors(self.line, n_monitors, n_turns, n_particles)
         self.twiss = self.line.twiss(method='4d', freeze_longitudinal=True,)
 
@@ -246,7 +250,7 @@ def _build_line(folder, slices):
                                           install_apertures=True)
 
 
-def _build_particles(line, n_particles, nemitt_x_0=1e-6, nemitt_y_0=1e-6):
+def _build_particles(line, n_particles, nemitt_x_0, nemitt_y_0, particle_on_co):
     particles = line.build_particles(
         num_particles=n_particles,
         x_norm=np.random.normal(size=n_particles),
@@ -255,9 +259,16 @@ def _build_particles(line, n_particles, nemitt_x_0=1e-6, nemitt_y_0=1e-6):
         py_norm=np.random.normal(size=n_particles),
         nemitt_x=nemitt_x_0,
         nemitt_y=nemitt_y_0,
+        particle_on_co=particle_on_co,
         method='4d',
         freeze_longitudinal=True,
         mode='normalized_transverse')
+
+    particles.x += (particle_on_co.x - np.mean(particles.x))
+    particles.y += (particle_on_co.y - np.mean(particles.y))
+    particles.px += (particle_on_co.px - np.mean(particles.px))
+    particles.py += (particle_on_co.py - np.mean(particles.py))
+
     return particles
 
 

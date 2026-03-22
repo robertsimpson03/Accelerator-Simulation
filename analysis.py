@@ -63,7 +63,7 @@ class Analysis:
         self.alfx = self.df_twiss['alfx'].values
         self.alfy = self.df_twiss['alfy'].values
 
-    def get_tune(self, xy):
+    def get_tune(self, xy, centroid=False):
         mon_mask = self.df_twiss['name'].str.contains('mon')
         df_mon = self.df_twiss[mon_mask]
 
@@ -78,24 +78,36 @@ class Analysis:
             beta = df_mon['bety'].values
             alpha = df_mon['alfy'].values
 
+        if centroid==True:
+            x = np.mean(x, axis=0)
+            p = np.mean(p, axis=0)
+
         beta_s = np.array(np.tile(beta, self.n_turns))
         alpha_s = np.array(np.tile(alpha, self.n_turns))
 
         x_norm =  x / np.sqrt(beta_s)
         p_norm = x * alpha_s / np.sqrt(beta_s) + p * np.sqrt(beta_s)
         z = x_norm - 1j * p_norm
-        
-        Q_total = []
-        for i in range(self.n_particles):
-            signal = z[i, :] - np.mean(z[i, :])
-            q_found = nafflib.get_tune(signal) * self.n_monitors
-            Q_total.append(np.abs(q_found))
-        result = np.array(Q_total)
 
-        if xy == 'x':
-            self.Qx = result
+        if centroid==False:
+            Q_total = []
+            for i in range(self.n_particles):
+                signal = z[i, :] - np.mean(z[i, :])
+                q_found = nafflib.get_tune(signal) * self.n_monitors
+                Q_total.append(np.abs(q_found))
+            result = np.array(Q_total)
+            if xy == 'x':
+                self.Qx = result
+            else:
+                self.Qy = result
         else:
-            self.Qy = result
+            signal = z - np.mean(z)
+            result = np.abs(nafflib.get_tune(signal) * self.n_monitors)
+
+            if xy == 'x':
+                self.Qx_centroid = result
+            else:
+                self.Qy_centroid = result
             
         return result
 
@@ -105,6 +117,10 @@ class Analysis:
             self.get_tune('x')
         if not hasattr(self, 'Qy'):
             self.get_tune('y')
+        if not hasattr(self, 'Qx_centroid'):
+            self.get_tune('x', centroid=True)
+        if not hasattr(self, 'Qy_centroid'):
+            self.get_tune('y', centroid=True)
 
         if x_lims is None:
             x_lims = (np.floor(self.qx), np.floor(self.qx) + 1)
@@ -122,6 +138,8 @@ class Analysis:
         
         ax.scatter(self.qx, self.qy, 
                    s=100, c='r', marker='*', zorder=5, label='Bare Tune')
+        ax.scatter(self.Qx_centroid, self.Qy_centroid, 
+                   s=100, c='b', marker='*', zorder=5, label='Centroid Tune')
         
         ax.set_xlabel(r"$Q_x$")
         ax.set_ylabel(r"$Q_y$")
