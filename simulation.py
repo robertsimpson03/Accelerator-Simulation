@@ -104,7 +104,7 @@ class DirectSpaceChargeElement(xt.BeamElement):
 @dataclass
 class Simulation:
     folder: Path = Path('Lattice_Files/02_Aperture_Lattice/')
-    threads: int = 1
+    threads: int = 0
     slices: int = 4
     particle_type: str = 'proton'
     p0c: float = 0.37033168 * 1e9
@@ -139,38 +139,38 @@ class Simulation:
         
         self.line.insert(kicks)
         
-
-    def set_up(self, n_particles, n_turns, n_monitors, 
-               nemitt_x_0=1e-6, nemitt_y_0=1e-6):
-        self.particle_on_co = self.line.find_closed_orbit(
-                num_turns=n_turns, freeze_longitudinal=True)
-
-        self.particles = _build_particles(self.line, n_particles, 
-                                          nemitt_x_0, nemitt_y_0,
-                                          self.particle_on_co)
-        self.line = _add_monitors(self.line, n_monitors, n_turns, n_particles)
-        self.twiss = self.line.twiss(method='4d', freeze_longitudinal=True,)
-
-        self.n_turns = n_turns
+    def build_particles(self, n_particles=100, nemitt_x_0=1e-6, nemitt_y_0=1e-6, co=False,
+                        offset_x=0, offset_y=0, offset_px=0, offset_py=0):
+        if co==False:
+            self.particles = _build_particles(
+                    self.line, n_particles, nemitt_x_0, nemitt_y_0,
+                    offset_x, offset_y, offset_px, offset_py)
+        else:
+            self.particles = _build_co_particle(
+                    self.line, offset_x, offset_y, offset_px, offset_py)
+            n_particles=1
         self.n_particles = n_particles
         self.nemitt_x_0 = nemitt_x_0
         self.nemitt_y_0 = nemitt_y_0
-        self.n_monitors = n_monitors
 
+    def set_up(self, n_turns=100, n_monitors=100):
+        self.line = _add_monitors(self.line, n_monitors, n_turns, self.n_particles)
+        self.twiss = self.line.twiss(method='4d', freeze_longitudinal=True,)
+        self.n_turns = n_turns
+        self.n_monitors = n_monitors
 
     def run(self, spacecharge=False, beam_intensity=1e9, 
             n_interactions=100, indirect_spacecharge=False,
-            pipe_enlargement=1):
+            xfields=False, pipe_enlargement=1):
         if spacecharge==True:
             (
-                    self.line, self.x0, self.y0, 
-                    self.sigma_x, self.sigma_y, 
-                    self.x_pipe, self.y_pipe, 
-                    self.x_length, self.y_length
+                self.line, self.x0, self.y0, self.sigma_x, self.sigma_y, 
+                self.x_pipe, self.y_pipe, self.x_length, self.y_length
             ) = _add_spacecharge(self.line, 
                                  beam_intensity, n_interactions, 
                                  self.nemitt_x_0, self.nemitt_y_0,
-                                 indirect_spacecharge, pipe_enlargement)
+                                 indirect_spacecharge, xfields,
+                                 pipe_enlargement)
             self.beam_intensity = beam_intensity
             self.n_interactions = n_interactions
 
@@ -183,7 +183,7 @@ class Simulation:
 
     def save(self, filename='untitled'):
         df_twiss = self.twiss.to_pandas()
-        df_twiss.to_hdf(f'data/{filename}.h5', key='twiss_data', 
+        df_twiss.to_hdf(f'{filename}.h5', key='twiss_data', 
                         mode='w', format='fixed')
 
         x = _unfold(self.line, 'x')
@@ -191,19 +191,24 @@ class Simulation:
         px = _unfold(self.line, 'px')
         py = _unfold(self.line, 'py')
 
-        with h5py.File(f'data/{filename}.h5', 'a') as f:
+        with h5py.File(f'{filename}.h5', 'a') as f:
             f.create_dataset('x', data=x, compression='gzip')
             f.create_dataset('y', data=y, compression='gzip')
             f.create_dataset('px', data=px, compression='gzip')
             f.create_dataset('py', data=py, compression='gzip')
 
+            f.create_dataset('survivor_mask', data=self.particles.state>0, compression='gzip')
+
             f.attrs['time'] = datetime.now().strftime("%Y%m%d_%H%M%S")
+            f.attrs['runtime'] = self.run_time
             f.attrs['threads'] = self.threads
             f.attrs['slices'] = self.slices
 
             f.attrs['gamma'] = self.line.particle_ref.gamma0
             f.attrs['beta'] = self.line.particle_ref.beta0
-            
+            f.attrs['p0c'] = self.line.particle_ref.p0c
+            f.attrs['length'] = self.line.get_length()
+
             f.attrs['n_particles'] = self.n_particles
             f.attrs['n_turns'] = self.n_turns
             f.attrs['n_monitors'] = self.n_monitors
@@ -230,10 +235,9 @@ class Simulation:
             except:
                 pass
 
-        print(f'File saved at data/{filename}')
+        print(f'File saved at {filename}')
 
-
-
+# --- Build line ---
 def _build_line(folder, slices):
         madx = Madx(stdout=False)
         madx.call(str(folder / 'ISIS.injected_beam'))
@@ -249,28 +253,38 @@ def _build_line(folder, slices):
         return xt.Line.from_madx_sequence(madx.sequence.synchrotron, 
                                           install_apertures=True)
 
+# --- Build particles ---
 
-def _build_particles(line, n_particles, nemitt_x_0, nemitt_y_0, particle_on_co):
+def _build_particles(line, n_particles, nemitt_x_0, nemitt_y_0, 
+                     offset_x, offset_y, offset_px, offset_py):
+    tw = line.twiss(method='4d', freeze_longitudinal=True)
     particles = line.build_particles(
-        num_particles=n_particles,
         x_norm=np.random.normal(size=n_particles),
         y_norm=np.random.normal(size=n_particles),
         px_norm=np.random.normal(size=n_particles),
         py_norm=np.random.normal(size=n_particles),
         nemitt_x=nemitt_x_0,
         nemitt_y=nemitt_y_0,
-        particle_on_co=particle_on_co,
         method='4d',
         freeze_longitudinal=True,
         mode='normalized_transverse')
-
-    particles.x += (particle_on_co.x - np.mean(particles.x))
-    particles.y += (particle_on_co.y - np.mean(particles.y))
-    particles.px += (particle_on_co.px - np.mean(particles.px))
-    particles.py += (particle_on_co.py - np.mean(particles.py))
+    particles.x += (tw.x[0] + offset_x - np.mean(particles.x))
+    particles.y += (tw.y[0] + offset_y - np.mean(particles.y))
+    particles.px += (tw.px[0] + offset_px - np.mean(particles.px))
+    particles.py += (tw.py[0] + offset_py - np.mean(particles.py))
 
     return particles
 
+def _build_co_particle(line, offset_x, offset_y, offset_px, offset_py):
+    tw = line.twiss(method='4d', freeze_longitudinal=True)
+    particle = line.build_particles(
+        x=tw.x[0] + offset_x, 
+        y=tw.y[0] + offset_y,
+        px=tw.px[0] + offset_px, 
+        py=tw.py[0] + offset_py)
+    return particle
+
+# --- Add monitors ---
 
 def _add_monitors(line, n_monitors, n_turns, n_particles):
     s_positions = np.linspace(0, line.get_length(), n_monitors, endpoint=False)
@@ -284,10 +298,12 @@ def _add_monitors(line, n_monitors, n_turns, n_particles):
     line.insert(monitors)
     return line
 
+# --- Add spacecharge ---
 
 def _add_spacecharge(line, beam_intensity, n_interactions, 
                      nemitt_x_0, nemitt_y_0, 
-                     indirect_spacecharge, pipe_enlargement):
+                     indirect_spacecharge, xfields,
+                     pipe_enlargement):
     length = line.get_length()
     line_density = e * beam_intensity/length
     kick_length = length/n_interactions
@@ -301,8 +317,8 @@ def _add_spacecharge(line, beam_intensity, n_interactions,
     x_length = pipe_enlargement * (max_x - min_x)
     y_length = pipe_enlargement * (max_y - min_y)
 
-    insertions = []
-    if indirect_spacecharge==False:
+    if indirect_spacecharge==True: # My rectangular indirect sc
+        insertions = []
         for i, s in enumerate(s_positions):
             sc_ele = DirectSpaceChargeElement(
                     element_length=kick_length, 
@@ -312,20 +328,40 @@ def _add_spacecharge(line, beam_intensity, n_interactions,
             insertions.append(line.env.place(f'sc_ele_{i}', obj=sc_ele, at=s))
         line.insert(insertions)
 
-    else:
+    elif xfields==False: # My direct SC
+        insertions = []
         for i, s in enumerate(s_positions):
-            sc_ele = IndirectSpaceChargeElement(
+            sc_ele = DirectSpaceChargeElement(
                     element_length=kick_length, 
                     x0=x0[i], y0=y0[i], 
                     sigma_x=sigma_x[i], sigma_y=sigma_y[i], 
-                    x_pipe=x_pipe[i], y_pipe=x_pipe[i], 
-                    x_length = x_length[i], y_length = y_length[i],
                     line_density=line_density)
             insertions.append(line.env.place(f'sc_ele_{i}', obj=sc_ele, at=s))
         line.insert(insertions)
 
+    else: # Xfields direct SC
+        sigma_z_fake = 1e16 
+        circumference = line.get_length()
+        n_particles = beam_intensity/line.get_length()
+        n_particles_fake = n_particles * np.sqrt(2*np.pi)*sigma_z_fake
+
+        lprofile = xf.LongitudinalProfileQGaussian(
+                number_of_particles= n_particles_fake,
+                sigma_z= sigma_z_fake,
+                z0= 0.,
+                q_parameter= 1.0)
+        xf.install_spacecharge_frozen(
+            line=line,
+            longitudinal_profile=lprofile,
+            nemitt_x=nemitt_x_0, 
+            nemitt_y=nemitt_y_0,
+            sigma_z=sigma_z_fake,
+            num_spacecharge_interactions=n_interactions,
+            delta_rms=0)
+
     return line, x0, y0, sigma_x, sigma_y, x_pipe, y_pipe, x_length, y_length
 
+# --- Get Beam parameters ---
 
 def _get_beam(line, s_positions, nemitt_x, nemitt_y):
     line_copy = line.copy(shallow=True)
@@ -343,7 +379,7 @@ def _get_beam(line, s_positions, nemitt_x, nemitt_y):
     sigmas_y = np.sqrt(bety * nemitt_y 
                        /(line.particle_ref.beta0*line.particle_ref.gamma0))
 
-    x0 = tw.x[indices]
+    x0 = tw.x[indices] 
     y0 = tw.y[indices]
     
     return x0, y0, sigmas_x, sigmas_y
@@ -372,4 +408,6 @@ def _unfold(line, prop):
     stacked = np.stack(data_list)
     transposed = stacked.transpose(1, 2, 0)
     return np.array(transposed.reshape(transposed.shape[0], -1))
+
+
 

@@ -5,7 +5,7 @@ import h5py
 
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.constants import e, m_p
+from scipy.constants import e, m_p, epsilon_0, c
 import pandas as pd
 
 import xtrack as xt
@@ -20,7 +20,9 @@ import nafflib
 
 class Analysis:
     def __init__(self, name):
-        with h5py.File(f'data/{name}.h5', 'r') as f:
+        with h5py.File(f'{name}.h5', 'r') as f:
+            self.time = f.attrs['time']
+            self.runtime = f.attrs['runtime']
             self.n_particles = f.attrs['n_particles']
             self.n_turns = f.attrs['n_turns']
             self.n_monitors = f.attrs['n_monitors']
@@ -29,7 +31,9 @@ class Analysis:
             
             self.gamma = f.attrs['gamma']
             self.beta = f.attrs['beta']
-            
+            self.p0c = f.attrs['p0c'] 
+            self.length = f.attrs['length']
+
             self.qx = f.attrs['qx']
             self.qy = f.attrs['qy']
             self.dqx = f.attrs['dqx']
@@ -56,7 +60,7 @@ class Analysis:
 
             self.twiss = f['twiss_data']
             
-        self.df_twiss = pd.read_hdf(f'data/{name}.h5', key='twiss_data')
+        self.df_twiss = pd.read_hdf(f'{name}.h5', key='twiss_data')
 
         self.betx = self.df_twiss['betx'].values
         self.bety = self.df_twiss['bety'].values
@@ -111,8 +115,23 @@ class Analysis:
             
         return result
 
+    def max_tune_shift(self):
+        k_e = 1/(4*np.pi*epsilon_0)
+        _lambda = self.beam_intensity / self.length
+        K_sc = (2*k_e*e*_lambda
+                /(self.beta*self.gamma**2*self.p0c))
 
-    def tune_histogram(self, x_lims=None, y_lims=None, show=True):
+        sig_x = np.mean(self.sigma_x)
+        sig_y = np.mean(self.sigma_y)
+        R = self.length / (2*np.pi)
+
+        DQx = K_sc*R**2/(2*sig_x*(sig_x+sig_y)*self.qx)
+        DQy = K_sc*R**2/(2*sig_y*(sig_x+sig_y)*self.qy)
+
+        return DQx, DQy
+
+
+    def tune_histogram(self, x_lims=None, y_lims=None, centroid=False, show=True):
         if not hasattr(self, 'Qx'):
             self.get_tune('x')
         if not hasattr(self, 'Qy'):
@@ -138,13 +157,18 @@ class Analysis:
         
         ax.scatter(self.qx, self.qy, 
                    s=100, c='r', marker='*', zorder=5, label='Bare Tune')
-        ax.scatter(self.Qx_centroid, self.Qy_centroid, 
-                   s=100, c='b', marker='*', zorder=5, label='Centroid Tune')
-        
+        if centroid==True:
+            ax.scatter(self.Qx_centroid, self.Qy_centroid, 
+                       s=100, c='b', marker='*', zorder=5, label='Centroid Tune')
+        if hasattr(self, 'sigma_x'):
+            self.DQx, self.DQy = self.max_tune_shift()
+            ax.scatter(self.qx - self.DQx, self.qy - self.DQy, 
+                       s=100, c='k', marker='*', zorder=5, label='Theoretical maximum tune shift')
+
         ax.set_xlabel(r"$Q_x$")
         ax.set_ylabel(r"$Q_y$")
         ax.set_title(f'Tune Footprint\nBare Tune: ({self.qx:.5f}, {self.qy:.5f})')
-        
+        ax.legend()
         ax.set_aspect('equal')
         ax.grid(True, linestyle=':', alpha=0.6)
         plt.tight_layout()
