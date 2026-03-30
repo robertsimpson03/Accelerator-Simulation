@@ -28,6 +28,9 @@ class Analysis:
             self.n_monitors = f.attrs['n_monitors']
             self.nemitt_x_0 = f.attrs['nemitt_x_0']
             self.nemitt_y_0 = f.attrs['nemitt_y_0']
+
+            self.nadmitt_x = f.attrs['nadmitt_x']
+            self.nadmitt_y = f.attrs['nadmitt_y']
             
             self.gamma = f.attrs['gamma']
             self.beta = f.attrs['beta']
@@ -43,6 +46,9 @@ class Analysis:
             self.y = f['y'][:]
             self.px = f['px'][:]
             self.py = f['py'][:]
+
+            self.survivor_mask = f['survivor_mask'][:]
+            self.particle_ids = f['particle_ids'][:]
 
             try:
                 self.n_interactions = f.attrs['n_interactions']
@@ -67,18 +73,24 @@ class Analysis:
         self.alfx = self.df_twiss['alfx'].values
         self.alfy = self.df_twiss['alfy'].values
 
-    def get_tune(self, xy, centroid=False):
+    def get_tune(self, xy, half=0, centroid=False):
+        surviving_ids = self.particle_ids[self.survivor_mask]
+        num_particles_total = len(self.particle_ids) 
+        self.n_particles_surv = np.sum(self.survivor_mask)
+        full_survivor_mask = np.zeros(num_particles_total, dtype=bool)
+        full_survivor_mask[surviving_ids] = True
+
         mon_mask = self.df_twiss['name'].str.contains('mon')
         df_mon = self.df_twiss[mon_mask]
 
         if xy == 'x':
-            x = self.x
-            p = self.px
+            x = self.x[full_survivor_mask]
+            p = self.px[full_survivor_mask]
             beta = df_mon['betx'].values
             alpha = df_mon['alfx'].values
         else:
-            x = self.y
-            p = self.py
+            x = self.y[full_survivor_mask]
+            p = self.py[full_survivor_mask]
             beta = df_mon['bety'].values
             alpha = df_mon['alfy'].values
 
@@ -86,8 +98,19 @@ class Analysis:
             x = np.mean(x, axis=0)
             p = np.mean(p, axis=0)
 
-        beta_s = np.array(np.tile(beta, self.n_turns))
-        alpha_s = np.array(np.tile(alpha, self.n_turns))
+        midpoint = np.shape(x.T)[0]//2
+        n_turns = self.n_turns
+        if half==1:
+            x = (x.T[:midpoint]).T
+            p = (p.T[:midpoint]).T
+            n_turns = n_turns//2
+        elif half==2:
+            x = x[midpoint:]
+            p = p[midpoint:]
+            n_turns = n_turns//2
+
+        beta_s = np.array(np.tile(beta, n_turns))
+        alpha_s = np.array(np.tile(alpha, n_turns))
 
         x_norm =  x / np.sqrt(beta_s)
         p_norm = x * alpha_s / np.sqrt(beta_s) + p * np.sqrt(beta_s)
@@ -95,7 +118,7 @@ class Analysis:
 
         if centroid==False:
             Q_total = []
-            for i in range(self.n_particles):
+            for i in range(self.n_particles_surv):
                 signal = z[i, :] - np.mean(z[i, :])
                 q_found = nafflib.get_tune(signal) * self.n_monitors
                 Q_total.append(np.abs(q_found))
@@ -131,15 +154,15 @@ class Analysis:
         return DQx, DQy
 
 
-    def tune_histogram(self, x_lims=None, y_lims=None, centroid=False, show=True):
+    def tune_histogram(self, x_lims=None, y_lims=None, centroid=False, show=True, half=0):
         if not hasattr(self, 'Qx'):
-            self.get_tune('x')
+            self.get_tune('x', half=half)
         if not hasattr(self, 'Qy'):
-            self.get_tune('y')
+            self.get_tune('y', half=half)
         if not hasattr(self, 'Qx_centroid'):
-            self.get_tune('x', centroid=True)
+            self.get_tune('x', half=half, centroid=True)
         if not hasattr(self, 'Qy_centroid'):
-            self.get_tune('y', centroid=True)
+            self.get_tune('y', half=half, centroid=True)
 
         if x_lims is None:
             x_lims = (np.floor(self.qx), np.floor(self.qx) + 1)
@@ -150,20 +173,21 @@ class Analysis:
         else:
             y_lims = y_lims
         
-        fig, ax = plt.subplots(figsize=(7, 7))
+        fig, ax = plt.subplots(figsize=(4, 4))
         h = ax.hist2d(self.Qx, self.Qy, 
                       bins=100, range=[x_lims, y_lims], cmap='Blues')
-        #fig.colorbar(h[3], ax=ax, label='Count')
         
         ax.scatter(self.qx, self.qy, 
                    s=100, c='r', marker='*', zorder=5, label='Bare Tune')
+        
         if centroid==True:
             ax.scatter(self.Qx_centroid, self.Qy_centroid, 
                        s=100, c='b', marker='*', zorder=5, label='Centroid Tune')
+
         if hasattr(self, 'sigma_x'):
             self.DQx, self.DQy = self.max_tune_shift()
             ax.scatter(self.qx - self.DQx, self.qy - self.DQy, 
-                       s=100, c='k', marker='*', zorder=5, label='Theoretical maximum tune shift')
+                       s=100, c='k', marker='*', zorder=5, label='Idealised maximum tune shift')
 
         ax.set_xlabel(r"$Q_x$")
         ax.set_ylabel(r"$Q_y$")
@@ -260,6 +284,7 @@ class Analysis:
         ax.set_title(f'Ensemble Average {xy} Spectrum (N={self.n_particles})')
         ax.grid(True, which='both', alpha=0.3)
         
+        print(freqs[mask][np.argmax(avg_magnitude[mask])])
         plt.show()
 
     def plot_sextupole_spectrum(self, plane='y'):

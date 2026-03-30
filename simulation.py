@@ -153,27 +153,36 @@ class Simulation:
         self.nemitt_x_0 = nemitt_x_0
         self.nemitt_y_0 = nemitt_y_0
 
+
     def set_up(self, n_turns=100, n_monitors=100):
         self.line = _add_monitors(self.line, n_monitors, n_turns, self.n_particles)
         self.twiss = self.line.twiss(method='4d', freeze_longitudinal=True,)
         self.n_turns = n_turns
         self.n_monitors = n_monitors
 
-    def run(self, spacecharge=False, beam_intensity=1e9, 
-            n_interactions=100, indirect_spacecharge=False,
-            xfields=False, pipe_enlargement=1):
-        if spacecharge==True:
-            (
-                self.line, self.x0, self.y0, self.sigma_x, self.sigma_y, 
-                self.x_pipe, self.y_pipe, self.x_length, self.y_length
-            ) = _add_spacecharge(self.line, 
-                                 beam_intensity, n_interactions, 
-                                 self.nemitt_x_0, self.nemitt_y_0,
-                                 indirect_spacecharge, xfields,
-                                 pipe_enlargement)
-            self.beam_intensity = beam_intensity
-            self.n_interactions = n_interactions
 
+    def add_spacecharge(self, beam_intensity=1e9, n_interactions=100, 
+                        nemitt_x=None, nemitt_y=None, xfields=False,
+                        indirect_spacecharge=False, pipe_enlargement=1):
+        if nemitt_x is None:
+            nemitt_x = self.nemitt_x_0
+        if nemitt_y is None:
+            nemitt_y = self.nemitt_y_0
+
+        (
+            self.line, self.x0, self.y0, self.sigma_x, self.sigma_y, 
+            self.x_pipe, self.y_pipe, self.x_length, self.y_length
+        ) = _add_spacecharge(self.line, beam_intensity, n_interactions, 
+                             nemitt_x, nemitt_y, indirect_spacecharge, 
+                             xfields, pipe_enlargement)
+
+        self.beam_intensity = beam_intensity
+        self.n_interactions = n_interactions
+        self.nemitt_x_sc = nemitt_x
+        self.nemitt_y_sc = nemitt_y
+
+
+    def run(self):
         self.line.build_tracker(_context=self.context)
 
         start_time=time.perf_counter()
@@ -191,6 +200,8 @@ class Simulation:
         px = _unfold(self.line, 'px')
         py = _unfold(self.line, 'py')
 
+        nadmitt_x, nadmitt_y = self.get_admittance()
+
         with h5py.File(f'{filename}.h5', 'a') as f:
             f.create_dataset('x', data=x, compression='gzip')
             f.create_dataset('y', data=y, compression='gzip')
@@ -198,6 +209,7 @@ class Simulation:
             f.create_dataset('py', data=py, compression='gzip')
 
             f.create_dataset('survivor_mask', data=self.particles.state>0, compression='gzip')
+            f.create_dataset('particle_ids', data=self.particles.particle_id, compression='gzip')
 
             f.attrs['time'] = datetime.now().strftime("%Y%m%d_%H%M%S")
             f.attrs['runtime'] = self.run_time
@@ -208,6 +220,9 @@ class Simulation:
             f.attrs['beta'] = self.line.particle_ref.beta0
             f.attrs['p0c'] = self.line.particle_ref.p0c
             f.attrs['length'] = self.line.get_length()
+
+            f.attrs['nadmitt_x'] = nadmitt_x
+            f.attrs['nadmitt_y'] = nadmitt_y
 
             f.attrs['n_particles'] = self.n_particles
             f.attrs['n_turns'] = self.n_turns
@@ -223,6 +238,8 @@ class Simulation:
             try:
                 f.attrs['n_interactions'] = self.n_interactions
                 f.attrs['beam_intensity'] = self.beam_intensity
+                f.attrs['nemitt_x_sc'] = self.nemitt_x_sc
+                f.attrs['nemitt_y_sc'] = self.nemitt_y_sc
 
                 f.create_dataset('x0', data=self.x0, compression='gzip')
                 f.create_dataset('y0', data=self.y0, compression='gzip')
@@ -234,8 +251,36 @@ class Simulation:
                 f.create_dataset('y_length', data=self.y_length, compression='gzip')
             except:
                 pass
-
         print(f'File saved at {filename}')
+
+
+    def get_admittance(self):
+        line=self.line
+        tw = self.twiss#line.twiss(method='4d', freeze_longitudinal=True)
+        names = []
+        w_x_limits = []
+        w_y_limits = []
+        s_positions = []
+
+        for name in line.element_names:
+            el = line[name]
+            if hasattr(el, 'min_x') and hasattr(el, 'max_x'):
+                a_x = (el.max_x - el.min_x) / 2
+                a_y = (el.max_y - el.min_y) / 2
+                
+                idx = np.where(tw.name == name)[0][0]
+                betx = tw.betx[idx]
+                bety = tw.bety[idx]
+                x_co = abs(tw.x[idx])
+                y_co = abs(tw.y[idx])
+                
+                w_x_limits.append((a_x-x_co)**2 / betx)
+                w_y_limits.append((a_y-y_co)**2 / bety)
+        betagamma = self.line.particle_ref.beta0*self.line.particle_ref.gamma0
+        nadmitt_x = betagamma*np.min(w_x_limits)
+        nadmitt_y = betagamma*np.min(w_y_limits)
+
+        return nadmitt_x, nadmitt_y
 
 # --- Build line ---
 def _build_line(folder, slices):
@@ -320,10 +365,12 @@ def _add_spacecharge(line, beam_intensity, n_interactions,
     if indirect_spacecharge==True: # My rectangular indirect sc
         insertions = []
         for i, s in enumerate(s_positions):
-            sc_ele = DirectSpaceChargeElement(
+            sc_ele = IndirectSpaceChargeElement(
                     element_length=kick_length, 
                     x0=x0[i], y0=y0[i], 
                     sigma_x=sigma_x[i], sigma_y=sigma_y[i], 
+                    x_pipe=x_pipe[i], y_pipe=y_pipe[i],
+                    x_length=x_length[i], y_length=y_length[i],
                     line_density=line_density)
             insertions.append(line.env.place(f'sc_ele_{i}', obj=sc_ele, at=s))
         line.insert(insertions)
