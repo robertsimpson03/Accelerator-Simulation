@@ -56,7 +56,8 @@ class IndirectSpaceChargeElement(xt.BeamElement):
                 particles.x-self.x_pipe, particles.y-self.y_pipe, 
                 x0=self.x0-self.x_pipe, y0=self.y0-self.y_pipe, 
                 sx=self.sigma_x, sy=self.sigma_y,
-                Lx=self.x_length, Ly=self.y_length)
+                Lx=self.x_length, Ly=self.y_length,
+                Nx=200, Ny=200)
         
         coef = (k_e * self.line_density * self.element_length
                 /(particles.energy0[0] * (particles.beta0[0]
@@ -117,7 +118,7 @@ class Simulation:
 
         self.line.set_particle_ref(self.particle_type, p0c=self.p0c)
 
-    def add_dipole(self, strength=1e-4, s=0, mode='skew'):
+    def add_dipole(self, strength=1e-4, s=0, mode='normal'):
         s_list = s if hasattr(s, '__len__') else [s]
         if not hasattr(strength, '__len__'):
             strengths = [strength] * len(s_list)
@@ -136,8 +137,8 @@ class Simulation:
                 name = f'dipole_at_{pos:.3f}'
                 kicks.append(self.line.env.place(name, obj=dipole, at=pos))
 
-        
         self.line.insert(kicks)
+
         
     def build_particles(self, n_particles=100, nemitt_x_0=1e-6, nemitt_y_0=1e-6, co=False,
                         offset_x=0, offset_y=0, offset_px=0, offset_py=0):

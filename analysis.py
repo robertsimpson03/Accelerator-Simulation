@@ -47,7 +47,7 @@ class Analysis:
             self.px = f['px'][:]
             self.py = f['py'][:]
 
-            self.survivor_mask = f['survivor_mask'][:]
+            survivor_mask = f['survivor_mask'][:]
             self.particle_ids = f['particle_ids'][:]
 
             try:
@@ -63,9 +63,7 @@ class Analysis:
                 self.y_length = f['y_length'][:]
             except:
                 pass
-
             self.twiss = f['twiss_data']
-            
         self.df_twiss = pd.read_hdf(f'{name}.h5', key='twiss_data')
 
         self.betx = self.df_twiss['betx'].values
@@ -73,6 +71,44 @@ class Analysis:
         self.alfx = self.df_twiss['alfx'].values
         self.alfy = self.df_twiss['alfy'].values
 
+        surviving_ids = self.particle_ids[survivor_mask]
+        num_particles_total = len(self.particle_ids) 
+        self.n_survivors = np.sum(survivor_mask)
+        self.survivor_mask = np.zeros(self.n_particles, dtype=bool)
+        self.survivor_mask[surviving_ids] = True
+
+        mon_mask = self.df_twiss['name'].str.contains('mon')
+        self.df_mon = self.df_twiss[mon_mask]
+
+    def get_tunes(self, x, p, xy, turns=None):
+        if turns is None:
+            turns = (0, self.n_turns-1)
+        if xy == 'x':
+            beta = self.df_mon['betx'].values
+            alpha = self.df_mon['alfx'].values
+        else:
+            beta = self.df_mon['bety'].values
+            alpha = self.df_mon['alfy'].values
+
+        n_turns = turns[1]-turns[0]
+        beta_s = np.array(np.tile(beta, n_turns))
+        alpha_s = np.array(np.tile(alpha, n_turns))
+
+        mons = [self.n_monitors*i for i in turns]
+        x = (x.T[mons[0]:mons[1]]).T
+        p = (p.T[mons[0]:mons[1]]).T 
+
+        x_norm =  x / np.sqrt(beta_s)
+        p_norm = x * alpha_s / np.sqrt(beta_s) + p * np.sqrt(beta_s)
+        z = x_norm - 1j * p_norm
+
+        Q_total = []
+        for i in range(len(x)):
+            signal = z[i, :] - np.mean(z[i, :])
+            q_found = nafflib.get_tune(signal) * self.n_monitors
+            Q_total.append(np.abs(q_found))
+        return np.array(Q_total)
+ 
     def get_tune(self, xy, half=0, centroid=False):
         surviving_ids = self.particle_ids[self.survivor_mask]
         num_particles_total = len(self.particle_ids) 

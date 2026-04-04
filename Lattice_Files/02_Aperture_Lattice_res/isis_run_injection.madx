@@ -1,0 +1,38 @@
+//lat3ud file in madx format
+
+CALL, FILE = 'ISIS.injected_beam';
+CALL, FILE = 'ISIS.elements';
+CALL, FILE = 'ISIS.strength';
+CALL, FILE = 'ISIS.sequence';
+CALL, FILE = 'isis.aperture';
+
+a1:=0.000;
+b1:=0.000;
+hn1:=7;
+
+USE, SEQUENCE=synchrotron;
+SELECT,flag=TWISS,COLUMN=name,s,x,y,betx,bety,mux,muy;
+TWISS,SAVE,file=isis_twiss.tfs;
+PLOT,HAXIS=S, VAXIS=BETX, BETY, COLOUR=100;
+
+quit;
+
+USE, SEQUENCE=dipole_fringe_test;
+SELECT,flag=TWISS,COLUMN=name,s,x,y,betx,bety,mux,muy;
+TWISS,SAVE,file=isis_twiss.tfs;
+PLOT,HAXIS=S, VAXIS=BETX, BETY, COLOUR=100;
+
+USE, SEQUENCE=sp_tune_m0;
+SELECT,flag=TWISS,COLUMN=name,s,x,y,betx,bety,mux,muy;
+TWISS,SAVE,file=isis_twiss.tfs;
+PLOT,HAXIS=S, VAXIS=BETX, BETY, COLOUR=100;
+
+USE, SEQUENCE=sp_tune_m1;
+SELECT,flag=TWISS,COLUMN=name,s,x,y,betx,bety,mux,muy;
+TWISS,SAVE,file=isis_twiss.tfs;
+PLOT,HAXIS=S, VAXIS=BETX, BETY, COLOUR=100;
+
+USE, SEQUENCE=superperiod;
+SELECT,flag=TWISS,COLUMN=name,s,x,y,betx,bety,mux,muy;
+TWISS,SAVE,file=isis_twiss.tfs;
+PLOT,HAXIS=S, VAXIS=BETX, BETY, COLOUR=100;
