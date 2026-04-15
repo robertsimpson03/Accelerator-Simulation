@@ -42,8 +42,7 @@ class IndirectSpaceChargeElement(xt.BeamElement):
                 particles.x-self.x_pipe, particles.y-self.y_pipe, 
                 x0=self.x0-self.x_pipe, y0=self.y0-self.y_pipe, 
                 sx=self.sigma_x, sy=self.sigma_y,
-                Lx=self.x_length, Ly=self.y_length,
-                Nx=200, Ny=200)
+                Lx=self.x_length, Ly=self.y_length)
         
         coef = (k_e * self.line_density * self.element_length
                 /(particles.energy0[0] * (particles.beta0[0]
