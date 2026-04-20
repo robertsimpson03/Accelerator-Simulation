@@ -77,7 +77,7 @@ def get_tunes(x, y, px, py, twiss_df_at_mon, survivor_mask, half=0):
         co_p_s = np.array(np.tile(co_p, n_turns))
 
         q_norm =  (q - co_q_s) / np.sqrt(beta_s)
-        p_norm = (q - co_q_s) * alaxs[i].set_aspect('equal')pha_s / np.sqrt(beta_s) + (p - co_p_s) * np.sqrt(beta_s)
+        p_norm = (q - co_q_s) * alpha_s / np.sqrt(beta_s) + (p - co_p_s) * np.sqrt(beta_s)
         z = q_norm - 1j * p_norm
 
         Q_total = []
